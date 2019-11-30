@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 
-[RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
+[RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(CapsuleCollider))]
 public class Bone : AbstractBone {
+
+	public AbstractBone root;
 
 	public int orientation = 0;		// whether children will go 'up' or 'down' in v-direction
 	//public Bone[] children;
@@ -26,24 +28,21 @@ public class Bone : AbstractBone {
 	public bool left = false;
 
 	// Use this for initialization
-	void Awake() {
 	
-	}
 
 	void Start () {
 		canonRotation = transform.rotation;
 
 		GetComponent<MeshRenderer>().material = new Material(Shader.Find("Diffuse"));
+		CapsuleCollider coll = GetComponent<CapsuleCollider>();
 
-		children = new Bone[transform.childCount];
-
-		int i = 0;
-		foreach(Transform child in transform) {
-			children[i++] = child.GetComponent<Bone>();
-		}
-
+		coll.radius = radius;
+		coll.height = length;
+		coll.center = Vector3.forward*length*0.5f;
+		coll.direction = 2;
+		
 		if (transform.parent != null) {
-			if (transform.parent.GetComponent<Bone>() == null) {
+			if (transform.parent.GetComponent<AbstractBone>() == null) {
 				Generate();
 			}
 		} else {
@@ -53,7 +52,7 @@ public class Bone : AbstractBone {
 
 	void Update() {
 		if(init)
-			pointAt(t+=1.0f/30);
+			pointAt(t+=1.0f/7);
 	}
 	
 
@@ -80,7 +79,7 @@ public class Bone : AbstractBone {
 			for(int i=0;i<10;i++) {
 				float theta = 2.0f*Mathf.PI / 10 * i;
 	        	//circle.Add(length * movementRad.x * Mathf.Cos(theta) * canonRotation[0] + length * movementRad.y *Mathf.Sin(theta) * canonRotation[1] + length * canonRotation[2] + transform.position);
-		    	circle.Add(canonRotation * (length * new Vector3(movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position);
+		    	circle.Add(root.transform.rotation * canonRotation * (length * new Vector3(movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position);
 		    }
 
 		    for(int i=0;i<10;i++) {
@@ -90,7 +89,44 @@ public class Bone : AbstractBone {
 		
 	}
 
-	void Generate() {
+	void setMovementRad(Vector2 v) {
+		movementRad = v;
+		if (pair != null)
+			pair.movementRad = v;
+	}
+
+	void pointAt(float theta) {
+		if (!pair || (pair && left)) {
+			t = theta;
+			Vector3 v = canonRotation * (length * new Vector3(-movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position;
+			transform.LookAt(v, canonRotation * Vector3.up);
+			transform.rotation = root.transform.rotation * transform.rotation;
+			
+			foreach(Bone child in children) {
+				//TODO: tree propagation
+				child.transform.LookAt(child.canonRotation * (length * new Vector3(-child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
+				child.transform.rotation = root.transform.rotation * child.transform.rotation;
+			}
+
+			if (pair) {
+				pair.movementRad = movementRad;
+				pair.t = -theta+Mathf.PI;
+				//do the same for the pair
+				Vector3 v2 = pair.canonRotation * (length * new Vector3(-pair.movementRad.x * Mathf.Sin(-theta+Mathf.PI), pair.movementRad.y * Mathf.Cos(-theta+Mathf.PI), 1).normalized) + pair.transform.position;
+				pair.transform.LookAt(v2, pair.canonRotation * Vector3.up);
+				pair.transform.rotation = root.transform.rotation * pair.transform.rotation;
+				
+				foreach(Bone child in pair.children) {
+					//TODO: tree propagation
+					child.transform.LookAt(child.canonRotation * (length * new Vector3(-child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
+					child.transform.rotation = root.transform.rotation * child.transform.rotation;
+				}
+			}
+		}
+		
+	}
+
+	public void Generate() {
 		// bottom - up parts
 		
 		orientation = Vector3.Angle(Vector3.forward, transform.forward) > 90 ? 1 : -1;
@@ -124,8 +160,9 @@ public class Bone : AbstractBone {
 		
 	}	
 
-	Mesh createChildrenMesh() {
-		Mesh mesh = generateMesh();
+	Mesh createChildrenMesh(int v=0) {
+		int h = (int)(length * 4)/4+1;
+		Mesh mesh = generateMesh(v);
 
 		if (children.Length > 0) {
 			Dictionary<Bone, int> vertexOffset = new Dictionary<Bone, int>();
@@ -134,13 +171,14 @@ public class Bone : AbstractBone {
 				vertexOffset.Add(children[i], mesh.vertices.Length);
 				//child.GetComponent<MeshFilter>().mesh =;
 
-				mesh = concatMesh(mesh, children[i].createChildrenMesh(), children[i].transform);
+				mesh = concatMesh(mesh, children[i].createChildrenMesh(v+h), children[i].transform);
 			}
 
 			int[] newfaces = new int[u_len * 6];
 
 			for (int i=0;i<u_len;i++) {
-				int h = (int)(length * 4)/4+1;
+				// connector
+				
 				Point p1 = hull[i];
 				Point p2 = hull[(i+1)%u_len];
 
@@ -165,7 +203,7 @@ public class Bone : AbstractBone {
 		return mesh;
 	}
 
-	Mesh generateMesh() {
+	Mesh generateMesh(int v=0) {
 		Mesh mesh = new Mesh();
 
 		List<Point> points = new List<Point>();
@@ -188,7 +226,7 @@ public class Bone : AbstractBone {
 
 		for(int i=0;i<w*h;i++) {
 			vertices[i] = points[i].position;
-			uvs[i] = new Vector2(1.0f*orientation*points[i].u_index /10 + (orientation > 0 ? 0.0f : 1.0f), 0.5f + 1.0f*orientation*points[i].verticalIndex / 10);
+			uvs[i] = new Vector2(1.0f*orientation*points[i].u_index /10 + (orientation > 0 ? 0.0f : 1.0f), 0.5f + 1.0f*orientation*(points[i].verticalIndex+v) / 10);
 			Debug.Log(((float)orientation*points[i].u_index) /10);
 		}
 
@@ -249,7 +287,7 @@ public class Bone : AbstractBone {
 
 	List<Bone> childrenLeftSorted() {
 		List<Bone> bones = new List<Bone>(children);
-		bones.Sort(delegate(Bone b1, Bone b2) {return Vector3.Dot(b1.transform.position - transform.right, transform.right).CompareTo(Vector3.Dot(b2.transform.position - transform.up, transform.right)); });
+		bones.Sort(delegate(Bone b1, Bone b2) {return Vector3.Dot(b1.transform.position - transform.position, transform.right).CompareTo(Vector3.Dot(b2.transform.position - transform.position, transform.right)); });
 		return bones;
 			
 	}
@@ -258,7 +296,7 @@ public class Bone : AbstractBone {
 		if (children.Length > 0) {
 			
 
-			if(pair & left) {
+			if(pair & left==true) {
 				List<Bone> bones1 = childrenLeftSorted();
 				List<Bone> bones2 = pair.childrenLeftSorted();
 
@@ -268,6 +306,7 @@ public class Bone : AbstractBone {
 					bones1[i].pair = bones2[n-1-i];
 					bones2[n-1-i].pair = bones1[i];
 					bones1[i].left = true;
+					bones2[i].left = false;
 				}
 
 			} else if (!pair) {
@@ -283,15 +322,18 @@ public class Bone : AbstractBone {
 			foreach(Bone child in children) {
 				child.radius = radius / children.Length;
 				child.orientation = orientation;
+				child.root = root;
+
 				child.setchildrenSetting();
 
 				child.init = true;
+				
 			}
 
 
 		}
 	}
-
+/*	
 	void childrenConvexHull() {
 		//set u_len via convex hull of children
 		if (children.Length > 0) {
@@ -329,39 +371,9 @@ public class Bone : AbstractBone {
 		}
 	}
 
-	void setMovementRad(Vector2 v) {
-		movementRad = v;
-		if (pair != null)
-			pair.movementRad = v;
-	}
+	
+*/	
 
-	void pointAt(float theta) {
-		if (!pair || (pair && left)) {
-			t = theta;
-			Vector3 v = canonRotation * (length * new Vector3(movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position;
-			transform.LookAt(v, canonRotation * Vector3.up);
-			
-			foreach(Bone child in children) {
-				//TODO: tree propagation
-				child.transform.LookAt(child.canonRotation * (length * new Vector3(child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
-			}
-
-			if (pair) {
-				pair.t = -theta+Mathf.PI;
-				//do the same for the pair
-				Vector3 v2 = pair.canonRotation * (length * new Vector3(pair.movementRad.x * Mathf.Sin(-theta+Mathf.PI), pair.movementRad.y * Mathf.Cos(-theta+Mathf.PI), 1).normalized) + pair.transform.position;
-				pair.transform.LookAt(v2, pair.canonRotation * Vector3.up);
-				
-				foreach(Bone child in pair.children) {
-					//TODO: tree propagation
-					child.transform.LookAt(child.canonRotation * (length * new Vector3(child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
-				}
-			}
-		}
-		
-	}
-
-/*	
 	void childrenConvexHull() {
 		//set u_len via convex hull of children
 		if (children.Length > 0) {
@@ -425,7 +437,7 @@ public class Bone : AbstractBone {
 			}
 		}
 	}
-*/	
+
 	void setChildrenUCoords() {
 		int i = 0;
 		foreach(Point p in hull) {
