@@ -3,46 +3,38 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 
-[RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(CapsuleCollider))]
-public class Bone : AbstractBone {
+[RequireComponent(typeof(CapsuleCollider))]
+public class Bone : RootBone {
 
-	public AbstractBone root;
+	[HideInInspector]
+	public RootBone root;
 
-	public int orientation = 0;		// whether children will go 'up' or 'down' in v-direction
-	//public Bone[] children;
+	private int orientation = 0;		// whether children will go 'up' or 'down' in v-direction
 
 	public float radius;
-	public float length;
 
-	//public int u_len=0;
-	//public int[] u_coords;
-	public List<Point> hull = new List<Point>();
 	
+	[HideInInspector]
 	public Bone pair;
+
 	public Vector2 movementRad = new Vector2(1.0f, 1.0f);	//should be same for pair
 
-	public Quaternion canonRotation;
-	public float t = 0.0f;
+	private Quaternion canonRotation;
+	private float t = 0.0f;
 
-	public bool init = false;
-	public bool left = false;
+	private bool init = false;
+	private bool left = false;
+
+	private int boneindex;
 
 	// Use this for initialization
 	
 
 	void Start () {
 		canonRotation = transform.rotation;
-
-		GetComponent<MeshRenderer>().material = new Material(Shader.Find("Diffuse"));
-		CapsuleCollider coll = GetComponent<CapsuleCollider>();
-
-		coll.radius = radius;
-		coll.height = length;
-		coll.center = Vector3.forward*length*0.5f;
-		coll.direction = 2;
 		
 		if (transform.parent != null) {
-			if (transform.parent.GetComponent<AbstractBone>() == null) {
+			if (transform.parent.GetComponent<RootBone>() == null) {
 				Generate();
 			}
 		} else {
@@ -70,7 +62,7 @@ public class Bone : AbstractBone {
         for(int i=0;i<hull.Count;i++) {
         	Point p1 = hull[i];
         	Point p2 = hull[(i+1)%hull.Count];
-	        Gizmos.DrawLine(p1.position + p1.bone.transform.position, p2.position + p2.bone.transform.position); 
+	        //Gizmos.DrawLine(p1.position + p1.bone.transform.position, p2.position + p2.bone.transform.position); 
 	    }
 		
 		if (init) {
@@ -79,7 +71,9 @@ public class Bone : AbstractBone {
 			for(int i=0;i<10;i++) {
 				float theta = 2.0f*Mathf.PI / 10 * i;
 	        	//circle.Add(length * movementRad.x * Mathf.Cos(theta) * canonRotation[0] + length * movementRad.y *Mathf.Sin(theta) * canonRotation[1] + length * canonRotation[2] + transform.position);
-		    	circle.Add(root.transform.rotation * canonRotation * (length * new Vector3(movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position);
+		    	// root.transform.rotation * 
+
+		    	circle.Add(canonRotation * (length * new Vector3(movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position);
 		    }
 
 		    for(int i=0;i<10;i++) {
@@ -89,23 +83,20 @@ public class Bone : AbstractBone {
 		
 	}
 
-	void setMovementRad(Vector2 v) {
-		movementRad = v;
-		if (pair != null)
-			pair.movementRad = v;
-	}
-
 	void pointAt(float theta) {
 		if (!pair || (pair && left)) {
+			// root.transform.rotation * 
 			t = theta;
 			Vector3 v = canonRotation * (length * new Vector3(-movementRad.x * Mathf.Sin(theta), movementRad.y * Mathf.Cos(theta), 1).normalized) + transform.position;
 			transform.LookAt(v, canonRotation * Vector3.up);
-			transform.rotation = root.transform.rotation * transform.rotation;
+			if (!root.useTrick)
+				transform.rotation = root.transform.rotation * transform.rotation;
 			
 			foreach(Bone child in children) {
 				//TODO: tree propagation
 				child.transform.LookAt(child.canonRotation * (length * new Vector3(-child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
-				child.transform.rotation = root.transform.rotation * child.transform.rotation;
+				if (!root.useTrick)
+					child.transform.rotation = root.transform.rotation * child.transform.rotation;
 			}
 
 			if (pair) {
@@ -114,12 +105,14 @@ public class Bone : AbstractBone {
 				//do the same for the pair
 				Vector3 v2 = pair.canonRotation * (length * new Vector3(-pair.movementRad.x * Mathf.Sin(-theta+Mathf.PI), pair.movementRad.y * Mathf.Cos(-theta+Mathf.PI), 1).normalized) + pair.transform.position;
 				pair.transform.LookAt(v2, pair.canonRotation * Vector3.up);
-				pair.transform.rotation = root.transform.rotation * pair.transform.rotation;
+				if (!root.useTrick)
+					pair.transform.rotation = root.transform.rotation * pair.transform.rotation;
 				
 				foreach(Bone child in pair.children) {
 					//TODO: tree propagation
 					child.transform.LookAt(child.canonRotation * (length * new Vector3(-child.movementRad.x * Mathf.Sin(child.t), child.movementRad.y * Mathf.Cos(child.t), 1).normalized) + child.transform.position, child.canonRotation * Vector3.up);
-					child.transform.rotation = root.transform.rotation * child.transform.rotation;
+					if (!root.useTrick)
+						child.transform.rotation = root.transform.rotation * child.transform.rotation;
 				}
 			}
 		}
@@ -128,10 +121,14 @@ public class Bone : AbstractBone {
 
 	public void Generate() {
 		// bottom - up parts
-		
 		orientation = Vector3.Angle(Vector3.forward, transform.forward) > 90 ? 1 : -1;
 
-		setchildrenSetting();
+		if(root.randomizeLength) 
+			randomLength();
+		if(root.randomizeMovement) 
+			randomMovement();
+
+		setchildrenSetting(root.transform.localToWorldMatrix);
 		
 		// convex hull of children circles
 		childrenConvexHull();
@@ -142,68 +139,11 @@ public class Bone : AbstractBone {
 		setChildrenUCoords();
 
 
-		// top - down parts
-
-		// from core circle, start generating mesh
-
-		
-
-		// create convex hull vertices
-
-		// generate children mesh, connect it with convex hull
-
-		// add to total mesh
-		Mesh mesh = createChildrenMesh();
-		GetComponent<MeshFilter>().mesh = mesh;
-
 		init = true;
-		
 	}	
+	
 
-	Mesh createChildrenMesh(int v=0) {
-		int h = (int)(length * 4)/4+1;
-		Mesh mesh = generateMesh(v);
-
-		if (children.Length > 0) {
-			Dictionary<Bone, int> vertexOffset = new Dictionary<Bone, int>();
-
-			for(int i=0;i<children.Length;i++) {
-				vertexOffset.Add(children[i], mesh.vertices.Length);
-				//child.GetComponent<MeshFilter>().mesh =;
-
-				mesh = concatMesh(mesh, children[i].createChildrenMesh(v+h), children[i].transform);
-			}
-
-			int[] newfaces = new int[u_len * 6];
-
-			for (int i=0;i<u_len;i++) {
-				// connector
-				
-				Point p1 = hull[i];
-				Point p2 = hull[(i+1)%u_len];
-
-				int a = (h-1)*u_len + i;
-				int b = (h-1)*u_len + (i+1)%u_len;
-				int c = vertexOffset[p1.bone] + p1.cylinderIndex;
-				int d = vertexOffset[p2.bone] + p2.cylinderIndex;
-
-				newfaces[i*6] = a;
-				newfaces[i*6+1] = c;
-				newfaces[i*6+2] = b;
-
-				newfaces[i*6+3] = b;
-				newfaces[i*6+4] = c;
-				newfaces[i*6+5] = d;
-			}
-
-			mesh.triangles = mesh.triangles.Concat(newfaces).ToArray();
-			mesh.RecalculateNormals();
-		}
-		
-		return mesh;
-	}
-
-	Mesh generateMesh(int v=0) {
+	protected override Mesh generateMesh(int v=0) {
 		Mesh mesh = new Mesh();
 
 		List<Point> points = new List<Point>();
@@ -211,6 +151,7 @@ public class Bone : AbstractBone {
 		Vector3[] vertices;
 		Vector2[] uvs;
 		int[] faces;
+		BoneWeight[] bones;
 
 		int w = u_len;
 		int h = (int)(length * 4)/4+1;
@@ -218,7 +159,7 @@ public class Bone : AbstractBone {
 		vertices = new Vector3[w*h];
 		uvs = new Vector2[w*h];
 		faces = new int[6*w*(h-1)];
-
+		bones = new BoneWeight[w*h];
 
 		for(int i=0;i<h;i++) {
 			points.AddRange(coreCircle(i, true, true));
@@ -226,8 +167,9 @@ public class Bone : AbstractBone {
 
 		for(int i=0;i<w*h;i++) {
 			vertices[i] = points[i].position;
-			uvs[i] = new Vector2(1.0f*orientation*points[i].u_index /10 + (orientation > 0 ? 0.0f : 1.0f), 0.5f + 1.0f*orientation*(points[i].verticalIndex+v) / 10);
-			Debug.Log(((float)orientation*points[i].u_index) /10);
+			uvs[i] = new Vector2(1.0f*orientation*points[i].u_index /root.u_len + (orientation > 0 ? 0.0f : 1.0f), 0.5f + 1.0f*orientation*(points[i].verticalIndex+v) / 10);
+			bones[i].boneIndex0 = boneindex;
+			bones[i].weight0 = 1;
 		}
 
 		
@@ -252,38 +194,25 @@ public class Bone : AbstractBone {
 		mesh.vertices = vertices;
 		mesh.triangles = faces;
 		mesh.uv = uvs;
-
-		return mesh;
-
-	}
-
-	Mesh concatMesh(Mesh m1, Mesh m2, Transform t) {
-		Mesh mesh = new Mesh();
-
-		int off = m1.vertices.Length;
-
-		int[] trigs = new int[m2.triangles.Length];
-		Vector3[] pos = new Vector3[m2.vertices.Length];
-		Vector2[] uv = new Vector2[m2.vertices.Length];
-
-
-		for(int i=0;i<m2.vertices.Length;i++){
-			pos[i] =  (Vector3)(transform.worldToLocalMatrix * t.localToWorldMatrix * m2.vertices[i]) + t.localPosition;
-			uv[i] = m2.uv[i];
-		}
-
-
-		for(int i=0;i<m2.triangles.Length;i++) {
-			trigs[i] = m2.triangles[i] +  off;
-		}
-		
-
-		mesh.vertices = m1.vertices.Concat(pos).ToArray();
-		mesh.uv = m1.uv.Concat(uv).ToArray();
-		mesh.triangles = m1.triangles.Concat(trigs).ToArray();
+		mesh.boneWeights = bones;
 
 		return mesh;
 	}
+
+	protected override int[] childrenConnect(Dictionary<Bone, int> vertexOffset, int i) {
+		int h = (int)(length * 4)/4+1;
+
+		Point p1 = hull[i];
+		Point p2 = hull[(i+1)%u_len];
+
+		int a = (h-1)*u_len + i;
+		int b = (h-1)*u_len + (i+1)%u_len;
+		int c = vertexOffset[p1.bone] + p1.cylinderIndex;
+		int d = vertexOffset[p2.bone] + p2.cylinderIndex;
+
+		return new int[4]{a,b,c,d};
+	}
+
 
 	List<Bone> childrenLeftSorted() {
 		List<Bone> bones = new List<Bone>(children);
@@ -292,7 +221,64 @@ public class Bone : AbstractBone {
 			
 	}
 
-	void setchildrenSetting() {
+	void randomMovement() {
+		float x = Random.Range(-1.0f, 1.0f);
+		float y = Random.Range(-1.0f, 1.0f);
+		Vector2 v = new Vector2(x,y);
+
+		if(pair & left) {
+			movementRad = v;
+			pair.movementRad = v;
+		}
+		else if (!pair)
+			movementRad = v;
+	}
+
+	void randomLength() {
+		float oldlength = length;
+		float newlength = Random.Range(root.minLength, root.maxLength);
+
+		if(pair & left) {
+			float oldlength_pair = pair.length;
+
+			length = newlength;
+
+			pair.length = newlength;
+
+			if(children.Length > 0) {
+				foreach(Bone child in children)
+					child.transform.localPosition += Vector3.forward*(newlength - oldlength);
+			}
+
+			if(pair.children.Length > 0) {
+				foreach(Bone child in pair.children)
+					child.transform.localPosition += Vector3.forward*(newlength - oldlength_pair);
+			}
+		}
+		else if (!pair) {
+			length = newlength;
+
+			if(children.Length > 0) {
+				foreach(Bone child in children)
+					child.transform.localPosition += Vector3.forward*(newlength - oldlength);
+			}
+		}
+	}
+
+	void setchildrenSetting(Matrix4x4 thing) {
+		boneindex = root.bone_transforms.Count;
+		root.bone_transforms.Add(transform);
+		root.bindposes.Add(transform.worldToLocalMatrix * thing);
+
+
+		CapsuleCollider coll = GetComponent<CapsuleCollider>();
+
+		coll.radius = radius;
+		coll.height = length;
+		coll.center = Vector3.forward*length*0.5f;
+		coll.direction = 2;
+
+		// initialize children
 		if (children.Length > 0) {
 			
 
@@ -319,40 +305,57 @@ public class Bone : AbstractBone {
 
 			}
 
+			
 			foreach(Bone child in children) {
-				child.radius = radius / children.Length;
+				if (child.radius == 0.0f)
+					child.radius = radius / children.Length;
+
 				child.orientation = orientation;
 				child.root = root;
+				//child.transform.localPosition = Vector3.forward*length;
 
-				child.setchildrenSetting();
+				if(root.randomizeLength) 
+					child.randomLength();
+				if(root.randomizeMovement) 
+					child.randomMovement();
+			}
+			
+			foreach(Bone child in children) {
+				child.setchildrenSetting(thing);
 
 				child.init = true;
-				
 			}
-
 
 		}
 	}
-/*	
+
 	void childrenConvexHull() {
 		//set u_len via convex hull of children
 		if (children.Length > 0) {
 			if(u_len != 0)
 				return;
 
-			List<Bone> bones = new List<Bone>();
-			List<Point> points = new List<Point>();
-			List<Vector3> centers = new List<Vector3>();
+			List<Bone> bones = childrenLeftSorted();
+			List<Point> hull_ = new List<Point>();
 
-			foreach(Bone child in children) {
+			foreach(Bone child in bones) {
 				child.childrenConvexHull();
-				bones.Add(child);
-
+				List<Point> points = child.coreCircle();
+				int s = child.u_len / 4;
+				int x = child.u_len/2;
+				int y = child.u_len - x;
+				for(int i=0;i<x;i++) {
+					hull_.Add(points[(s+i)%child.u_len]);
+				}
+				for(int i=1;i<=y;i++) {
+					hull_.Insert(0,points[s-i<0?s-i+child.u_len:s-i]);
+				}
 			}
 
-			bones.Sort(delegate(Bone b1, Bone b2) {return Vector3.Dot(b1.transform.position - transform.right, transform.right).CompareTo(Vector3.Dot(b2.transform.position - transform.up, transform.right)); });
+			int a = hull_.Count/2;
+			for(int i=a;i<a+hull_.Count;i++)
+				hull.Add(hull_[i%hull_.Count]);
 
-			
 
 			u_len = hull.Count;	
 			u_coords = new int[u_len];
@@ -372,72 +375,6 @@ public class Bone : AbstractBone {
 	}
 
 	
-*/	
-
-	void childrenConvexHull() {
-		//set u_len via convex hull of children
-		if (children.Length > 0) {
-			if(u_len != 0)
-				return;
-
-			List<Point> points = new List<Point>();
-			Point start, v0, v1;
-
-			foreach(Bone child in children) {
-				child.childrenConvexHull();
-				points.AddRange(child.coreCircle());
-			}
-
-			start = points[0];
-			foreach(Point p in points) {
-				//project
-				p.position = new Vector3(Vector3.Dot(p.position - transform.up, transform.up), Vector3.Dot(p.position - transform.right, transform.right), 0);
-
-				if(start.position.x < p.position.x)		// refine this rule
-					start = p;
-				else if(Mathf.Abs(start.position.x - p.position.x) < 0.0001 && Mathf.Abs(start.position.y) < Mathf.Abs(p.position.y)) {
-					start = p;
-				}
-			}
-
-			hull.Add(start);
-
-			v0 = start;
-
-			do {
-				v1 = points[1];
-				foreach(Point p in points) {
-					float c = Vector3.SignedAngle((v1.position - v0.position).normalized, (p.position - v0.position).normalized, Vector3.forward);
-					if(c < 0) {
-						v1 = p;
-					}
-				}
-
-				points.Remove(v1);
-				hull.Add(v1);
-				v0 = v1;
-			} while (v1 != start && points.Count > 1);
-
-			int i=0;
-			foreach(Point p in hull) {
-				p.calcPos(true);
-				p.u_index = i++;
-			}
-
-			u_len = hull.Count;	
-			u_coords = new int[u_len];
-
-		} else {
-			u_len = 5;
-			u_coords = new int[u_len];
-			hull = coreCircle();
-
-			foreach(Point p in hull) {
-				p.calcPos(true);
-			}
-		}
-	}
-
 	void setChildrenUCoords() {
 		int i = 0;
 		foreach(Point p in hull) {
